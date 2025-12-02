@@ -17,6 +17,7 @@ import           Development.IDE.Spans.Pragmas    (getNextPragmaInfo,
 import           Ide.Plugin.Error
 import           Ide.PluginUtils
 import           Language.LSP.Protocol.Types
+import GHC.Unit.State (UnitIndexQuery)
 
 -- | All instance bindings are started with `$c`
 bindingPrefix :: IsString s => s
@@ -39,8 +40,8 @@ prettyBindingNameString name
         toMethodName $ T.drop (T.length bindingPrefix) name
     | otherwise = name
 
-showDoc :: HscEnv -> TcGblEnv -> Type -> String
-showDoc hsc gblEnv ty = showSDocForUser' hsc (mkPrintUnqualifiedDefault hsc (rdrEnv gblEnv)) (pprSigmaType ty)
+showDoc :: HscEnv -> UnitIndexQuery -> TcGblEnv -> Type -> String
+showDoc hsc query gblEnv ty = showSDocForUser' hsc (mkPrintUnqualifiedDefault hsc query (rdrEnv gblEnv)) (pprSigmaType ty)
     where rdrEnv gblEnv = tcg_rdr_env gblEnv
 
 -- | Paren the name for pretty display if necessary

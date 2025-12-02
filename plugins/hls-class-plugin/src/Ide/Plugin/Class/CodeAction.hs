@@ -49,6 +49,9 @@ import           Ide.Types
 import qualified Language.LSP.Protocol.Lens           as L
 import           Language.LSP.Protocol.Message
 import           Language.LSP.Protocol.Types
+import Control.Monad.IO.Class (liftIO)
+import GHC.Unit.State (UnitIndexQuery)
+import GHC.Driver.Env (hscUnitIndexQuery)
 
 addMethodPlaceholders :: PluginId -> CommandFunction IdeState AddMinimalMethodsParams
 addMethodPlaceholders _ state _ param@AddMinimalMethodsParams{..} = do
@@ -120,19 +123,20 @@ codeAction recorder state plId (CodeActionParams _ _ docId caRange _) = do
             (tmrTypechecked -> gblEnv ) <- runActionE "classplugin.codeAction.TypeCheck" state $ useE TypeCheck docPath
             (hscEnv -> hsc) <- runActionE "classplugin.codeAction.GhcSession" state $ useE GhcSession docPath
             logWith recorder Debug (LogImplementedMethods (hsc_dflags hsc) cls classMinDef)
+            query <- liftIO $ hscUnitIndexQuery hsc
             pure
                 $ concatMap mkAction
                 $ nubOrdOn snd
                 $ filter ((/=) mempty . snd)
-                $ mkMethodGroups hsc gblEnv range sigs classMinDef
+                $ mkMethodGroups hsc query gblEnv range sigs classMinDef
             where
                 range = diag ^. fdLspDiagnosticL . L.range
 
-                mkMethodGroups :: HscEnv -> TcGblEnv -> Range -> [InstanceBindTypeSig] -> ClassMinimalDef -> [MethodGroup]
-                mkMethodGroups hsc gblEnv range sigs classMinDef = minimalDef <> [allClassMethods]
+                mkMethodGroups :: HscEnv -> UnitIndexQuery -> TcGblEnv -> Range -> [InstanceBindTypeSig] -> ClassMinimalDef -> [MethodGroup]
+                mkMethodGroups hsc query gblEnv range sigs classMinDef = minimalDef <> [allClassMethods]
                     where
-                        minimalDef = minDefToMethodGroups hsc gblEnv range sigs classMinDef
-                        allClassMethods = ("all missing methods", makeMethodDefinitions hsc gblEnv range sigs)
+                        minimalDef = minDefToMethodGroups hsc query gblEnv range sigs classMinDef
+                        allClassMethods = ("all missing methods", makeMethodDefinitions hsc query gblEnv range sigs)
 
                 mkAction :: MethodGroup -> [Command |? CodeAction]
                 mkAction (name, methods)
@@ -208,15 +212,15 @@ type MethodName = T.Text
 type MethodDefinition = (MethodName, MethodSignature)
 type MethodGroup = (T.Text, [MethodDefinition])
 
-makeMethodDefinition :: HscEnv -> TcGblEnv -> InstanceBindTypeSig -> MethodDefinition
-makeMethodDefinition hsc gblEnv sig = (name, signature)
+makeMethodDefinition :: HscEnv -> UnitIndexQuery -> TcGblEnv -> InstanceBindTypeSig -> MethodDefinition
+makeMethodDefinition hsc query gblEnv sig = (name, signature)
     where
         name = T.drop (T.length bindingPrefix) (printOutputable  (bindName sig))
-        signature = prettyBindingNameString (printOutputable (bindName sig)) <> " :: " <> T.pack (showDoc hsc gblEnv (bindType sig))
+        signature = prettyBindingNameString (printOutputable (bindName sig)) <> " :: " <> T.pack (showDoc hsc query gblEnv (bindType sig))
 
-makeMethodDefinitions :: HscEnv -> TcGblEnv -> Range -> [InstanceBindTypeSig] -> [MethodDefinition]
-makeMethodDefinitions hsc gblEnv range sigs =
-    [ makeMethodDefinition hsc gblEnv sig
+makeMethodDefinitions :: HscEnv -> UnitIndexQuery -> TcGblEnv -> Range -> [InstanceBindTypeSig] -> [MethodDefinition]
+makeMethodDefinitions hsc query gblEnv range sigs =
+    [ makeMethodDefinition hsc query gblEnv sig
     | sig <- sigs
     , inRange range (getSrcSpan $ bindName sig)
     ]
@@ -225,14 +229,14 @@ signatureToName :: InstanceBindTypeSig -> T.Text
 signatureToName sig = T.drop (T.length bindingPrefix) (printOutputable (bindName sig))
 
 -- Return [groupName text, [(methodName text, signature text)]]
-minDefToMethodGroups :: HscEnv -> TcGblEnv -> Range -> [InstanceBindTypeSig] -> BooleanFormula Name -> [MethodGroup]
-minDefToMethodGroups hsc gblEnv range sigs minDef = makeMethodGroup <$> go minDef
+minDefToMethodGroups :: HscEnv -> UnitIndexQuery -> TcGblEnv -> Range -> [InstanceBindTypeSig] -> BooleanFormula Name -> [MethodGroup]
+minDefToMethodGroups hsc query gblEnv range sigs minDef = makeMethodGroup <$> go minDef
     where
         makeMethodGroup methodDefinitions =
             let name = mconcat $ intersperse "," $ (\x -> "'" <> x <> "'") . fst <$> methodDefinitions
             in  (name, methodDefinitions)
 
-        go (Var mn)   = pure $ makeMethodDefinitions hsc gblEnv range $ filter ((==) (printOutputable mn) . signatureToName) sigs
+        go (Var mn)   = pure $ makeMethodDefinitions hsc query gblEnv range $ filter ((==) (printOutputable mn) . signatureToName) sigs
         go (Or ms)    = concatMap (go . unLoc) ms
         go (And ms)   = foldr (liftA2 (<>) . go . unLoc) [[]] ms
         go (Parens m) = go (unLoc m)

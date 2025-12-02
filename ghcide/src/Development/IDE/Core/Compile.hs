@@ -155,6 +155,8 @@ import           Development.IDE.Import.FindImports
 #endif
 import           GHC.Unit.Module.ModIface                     (IfaceTopEnv (..))
 
+import GHC.Driver.Env (hscUnitIndexQuery)
+
 --Simple constants to make sure the source is consistently named
 sourceTypecheck :: T.Text
 sourceTypecheck = "typecheck"
@@ -1086,6 +1088,8 @@ getModSummaryFromImports env fp _modTime mContents = do
     -- The warns will hopefully be reported when we actually parse the module
     (_warns, L main_loc hsmod) <- parseHeader dflags fp contents
 
+    query <- liftIO $ hscUnitIndexQuery env
+
     -- Copied from `HeaderInfo.getImports`, but we also need to keep the parsed imports
     let mb_mod = hsmodName hsmod
         imps = hsmodImports hsmod
@@ -1112,7 +1116,7 @@ getModSummaryFromImports env fp _modTime mContents = do
 
         msrImports = implicit_imports ++ imps
 
-        rn_pkg_qual = renameRawPkgQual (hsc_unit_env ppEnv)
+        rn_pkg_qual = renameRawPkgQual (hsc_unit_env ppEnv) query
         rn_imps = fmap (\(pk, lmn@(L _ mn)) -> (rn_pkg_qual mn pk, lmn))
         srcImports = rn_imps $ map convImport src_idecls
         textualImports = rn_imps $ map convImport (implicit_imports ++ ordinary_imps)

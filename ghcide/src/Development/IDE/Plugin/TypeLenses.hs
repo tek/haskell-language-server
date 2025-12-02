@@ -14,6 +14,8 @@ module Development.IDE.Plugin.TypeLenses (
   Log(..)
   ) where
 
+import GHC.Driver.Env (hscUnitIndexQuery)
+import GHC.Unit.State (UnitIndexQuery)
 import           Control.Concurrent.STM.Stats         (atomically)
 import           Control.DeepSeq                      (rwhnf)
 import           Control.Lens                         (to, (?~), (^?))
@@ -287,8 +289,8 @@ instance A.FromJSON Mode where
 
 --------------------------------------------------------------------------------
 
-showDocRdrEnv :: HscEnv -> GlobalRdrEnv -> SDoc -> String
-showDocRdrEnv env rdrEnv = showSDocForUser' env (mkPrintUnqualifiedDefault env rdrEnv)
+showDocRdrEnv :: HscEnv -> UnitIndexQuery -> GlobalRdrEnv -> SDoc -> String
+showDocRdrEnv env query rdrEnv = showSDocForUser' env (mkPrintUnqualifiedDefault env query rdrEnv)
 
 data GetGlobalBindingTypeSigs = GetGlobalBindingTypeSigs
   deriving (Generic, Show, Eq, Ord, Hashable, NFData)
@@ -323,12 +325,13 @@ rules recorder = do
 
 gblBindingType :: Maybe HscEnv -> Maybe TcGblEnv -> IO (Maybe GlobalBindingTypeSigsResult)
 gblBindingType (Just hsc) (Just gblEnv) = do
+  query <- hscUnitIndexQuery hsc
   let exports = availsToNameSet $ tcg_exports gblEnv
       sigs = tcg_sigs gblEnv
       binds = collectHsBindsBinders $ tcg_binds gblEnv
       patSyns = tcg_patsyns gblEnv
       rdrEnv = tcg_rdr_env gblEnv
-      showDoc = showDocRdrEnv hsc rdrEnv
+      showDoc = showDocRdrEnv hsc query rdrEnv
       hasSig :: (Monad m) => Name -> m a -> m (Maybe a)
       hasSig name f = whenMaybe (name `elemNameSet` sigs) f
       bindToSig identifier = liftZonkM $ do
