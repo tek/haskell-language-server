@@ -116,6 +116,7 @@ import           GHC.Types.Error
 import           GHC.Types.ForeignStubs
 import           GHC.Types.HpcInfo
 import           GHC.Types.TypeEnv
+import           GHC.Linker.Types (LinkableObjectSort (..))
 
 -- See Note [Guidelines For Using CPP In GHCIDE Import Statements]
 
@@ -142,15 +143,27 @@ import           Development.IDE.GHC.Compat                   hiding
                                                                writeHieFile)
 #endif
 
-#if MIN_VERSION_ghc(9,11,0)
 import qualified Data.List.NonEmpty                           as NE
 import           Data.Time                                    (getCurrentTime)
+#if MIN_VERSION_ghc(9,11,0)
 import           GHC.Driver.Env                               (hsc_all_home_unit_ids)
 import           GHC.Iface.Ext.Types                          (NameEntityInfo)
 #endif
 
 #if MIN_VERSION_ghc(9,12,0)
 import           Development.IDE.Import.FindImports
+#endif
+import           GHC.Unit.Module.ModIface                     (IfaceTopEnv (..))
+
+#if defined(MWB)
+
+import Control.Monad (foldM)
+import Data.IORef (atomicModifyIORef')
+import qualified Data.Map.Merge.Strict                              as Map
+import GHC.Driver.Env (hscUnitIndexQuery)
+import GHC.Unit.Home.Graph
+import GHC.Unit.Home.PackageTable
+
 #endif
 
 --Simple constants to make sure the source is consistently named
@@ -292,7 +305,7 @@ captureSplicesAndDeps TypecheckHelpers{..} env k = do
                        (icInteractiveModule ictxt)
                        stg_expr
                        [] Nothing
-#if MIN_VERSION_ghc(9,11,0)
+#if MIN_VERSION_ghc(9,11,0) || defined(MWB)
                        [] -- spt_entries
 #endif
 
@@ -311,7 +324,11 @@ captureSplicesAndDeps TypecheckHelpers{..} env k = do
                                          , moduleUnitId mod `elem` home_unit_ids -- Only care about stuff from the home package set
                                          ]
                  home_unit_ids =
+#if defined(MWB)
+                    Set.toList (unitEnv_keys (hsc_HUG hsc_env))
+#else
                     map fst (hugElts $ hsc_HUG hsc_env)
+#endif
                  mods_transitive = getTransitiveMods hsc_env needed_mods
 
                  -- If we don't support multiple home units, ModuleNames are sufficient because all the units will be the same
@@ -323,10 +340,10 @@ captureSplicesAndDeps TypecheckHelpers{..} env k = do
                                  | installedMod <- mods_transitive_list
                                  , let file = fromJust $ lookupModuleFile (installedMod { moduleUnit = RealUnit (Definite $ moduleUnit installedMod) }) moduleLocs
                                  ]
-           ; let hsc_env' = loadModulesHome (map linkableHomeMod lbs) hsc_env
+           ; hsc_env' <- loadModulesHome (map linkableHomeMod lbs) hsc_env
 
              {- load it -}
-#if MIN_VERSION_ghc(9,11,0)
+#if MIN_VERSION_ghc(9,11,0) || defined(MWB)
            ; bco_time <- getCurrentTime
            ; (fv_hvs, lbss, pkgs) <- loadDecls (hscInterp hsc_env') hsc_env' srcspan $
                 Linkable bco_time (icInteractiveModule ictxt) $ NE.singleton $ BCOs bcos
@@ -351,8 +368,8 @@ captureSplicesAndDeps TypecheckHelpers{..} env k = do
 
     -- Compute the transitive set of linkables required
     getTransitiveMods hsc_env needed_mods
-      = Set.unions (Set.fromList (map moduleToNodeKey mods) : [ dep | m <- mods
-                                                              , Just dep <- [Map.lookup (moduleToNodeKey m) (mgTransDeps (hsc_mod_graph hsc_env))]
+      = Set.unions (Set.fromList (map moduleToNodeKey mods) : [ Set.fromList (mkNodeKey <$> dep) | m <- mods
+                                                              , Just dep <- [mgReachable (hsc_mod_graph hsc_env) (moduleToNodeKey m)]
                                                               ])
       where mods = nonDetEltsUniqSet needed_mods -- OK because we put them into a set immediately after
 
@@ -458,11 +475,11 @@ mkHiFileResultNoCompile session tcm = do
   iface' <- mkIfaceTc hsc_env_tmp sf details ms Nothing tcGblEnv
   -- See Note [Clearing mi_globals after generating an iface]
   let iface = iface'
-#if MIN_VERSION_ghc(9,11,0)
+#if MIN_VERSION_ghc(9,11,0) || defined(MWB)
                 & set_mi_top_env Nothing
                 & set_mi_usages (filterUsages (mi_usages iface'))
 #else
-                { mi_globals = Nothing, mi_usages = filterUsages (mi_usages iface') }
+                { mi_top_env = Nothing, mi_usages = filterUsages (mi_usages iface') }
 #endif
   pure $! mkHiFileResult ms iface details (tmrRuntimeModules tcm) Nothing
 
@@ -487,23 +504,23 @@ mkHiFileResultCompile se session' tcm simplified_guts = catchErrs $ do
                                               (cg_binds guts)
                                               details
                                               ms
-#if MIN_VERSION_ghc(9,11,0)
+#if MIN_VERSION_ghc(9,11,0) || defined(MWB)
                                               (tcg_import_decls (tmrTypechecked tcm))
 #endif
                                               simplified_guts
 
   final_iface' <- mkFullIface session partial_iface Nothing
                     Nothing
-#if MIN_VERSION_ghc(9,11,0)
+#if MIN_VERSION_ghc(9,11,0) || defined(MWB)
                     NoStubs []
 #endif
   -- See Note [Clearing mi_globals after generating an iface]
   let final_iface = final_iface'
-#if MIN_VERSION_ghc(9,11,0)
+#if MIN_VERSION_ghc(9,11,0) || defined(MWB)
                       & set_mi_top_env Nothing
                       & set_mi_usages (filterUsages (mi_usages final_iface'))
 #else
-                      {mi_globals = Nothing, mi_usages = filterUsages (mi_usages final_iface')}
+                      {mi_top_env = Nothing, mi_usages = filterUsages (mi_usages final_iface')}
 #endif
 
   -- Write the core file now
@@ -658,7 +675,7 @@ generateObjectCode session summary guts = do
                         Just x -> pure x
               -- Need time to be the modification time for recompilation checking
               t <- liftIO $ getModificationTime dot_o_fp
-#if MIN_VERSION_ghc(9,11,0)
+#if MIN_VERSION_ghc(9,11,0) || defined(MWB)
               let linkable = Linkable t mod (pure $ DotO dot_o_fp ModuleObject)
 #else
               let linkable = LM t mod [DotO dot_o_fp]
@@ -672,7 +689,7 @@ generateByteCode (CoreFileTime time) hscEnv summary guts = do
     fmap (either (, Nothing) (second Just)) $
           catchSrcErrors (hsc_dflags hscEnv) "bytecode" $ do
 
-#if MIN_VERSION_ghc(9,11,0)
+#if MIN_VERSION_ghc(9,11,0) || defined(MWB)
               (warnings, (_, bytecode)) <-
                 withWarnings "bytecode" $ \_tweak -> do
                       let session = _tweak (hscSetFlags (ms_hspp_opts summary) hscEnv)
@@ -690,7 +707,7 @@ generateByteCode (CoreFileTime time) hscEnv summary guts = do
                                 (ms_location summary')
 #endif
 
-#if MIN_VERSION_ghc(9,11,0)
+#if MIN_VERSION_ghc(9,10,0)
               let linkable = Linkable time (ms_mod summary) (pure $ BCOs bytecode)
 #else
               let linkable = LM time (ms_mod summary) [BCOs bytecode sptEntries]
@@ -987,7 +1004,7 @@ mergeEnvs :: HscEnv
           -> [HscEnv]
           -> IO HscEnv
 mergeEnvs env mg dep_info ms extraMods envs = do
-    return $! loadModulesHome extraMods $
+    loadModulesHome extraMods $
       let newHug = foldl' mergeHUG (hsc_HUG env) (map hsc_HUG envs) in
       (hscUpdateHUG (const newHug) env){
           hsc_mod_graph = mg,
@@ -1027,19 +1044,32 @@ mergeEnvs :: HscEnv
           -> IO HscEnv
 mergeEnvs env mg _dep_info ms extraMods envs = do
     let im  = Compat.installedModule (toUnitId $ moduleUnit $ ms_mod ms) (moduleName (ms_mod ms))
+#if defined(MWB)
+        ifr = InstalledFound (ms_location ms)
+#else
         ifr = InstalledFound (ms_location ms) im
+#endif
         curFinderCache = Compat.extendInstalledModuleEnv Compat.emptyInstalledModuleEnv im ifr
     newFinderCache <- concatFC curFinderCache (map hsc_FC envs)
-    return $! loadModulesHome extraMods $
-      let newHug = foldl' mergeHUG (hsc_HUG env) (map hsc_HUG envs) in
+    newHug <- foldM mergeHUG (hsc_HUG env) (map hsc_HUG envs)
+    loadModulesHome extraMods $
       (hscUpdateHUG (const newHug) env){
           hsc_FC = newFinderCache,
           hsc_mod_graph = mg
       }
 
     where
-        mergeHUG (UnitEnvGraph a) (UnitEnvGraph b) = UnitEnvGraph $ Map.unionWith mergeHUE a b
+#if defined(MWB)
+        mergeHUG (UnitEnvGraph a) (UnitEnvGraph b) = UnitEnvGraph <$> Map.mergeA Map.preserveMissing Map.preserveMissing (Map.zipWithAMatched mergeHUE) a b
+        mergeHUE _ a b = do
+            hpt_b <- readIORef (hptInternalTableRef (homeUnitEnv_hpt b))
+            hpt <- atomicModifyIORef' (hptInternalTableRef (homeUnitEnv_hpt a)) $ \ hpt_a -> (mergeUDFM hpt_a hpt_b, ())
+            pure a
+#else
+        mergeHUG (UnitEnvGraph a) (UnitEnvGraph b) = pure (UnitEnvGraph $ Map.unionWith mergeHUE a b)
         mergeHUE a b = a { homeUnitEnv_hpt = mergeUDFM (homeUnitEnv_hpt a) (homeUnitEnv_hpt b) }
+#endif
+
         mergeUDFM = plusUDFM_C combineModules
 
         combineModules a b
@@ -1049,7 +1079,11 @@ mergeEnvs env mg _dep_info ms extraMods envs = do
         -- Prefer non-boot files over non-boot files
         -- otherwise we can get errors like https://gitlab.haskell.org/ghc/ghc/-/issues/19816
         -- if a boot file shadows over a non-boot file
+#if defined(MWB)
+        combineModuleLocations a _ = a
+#else
         combineModuleLocations a@(InstalledFound ml _) _ | Just fp <- ml_hs_file ml, not ("boot" `isSuffixOf` fp) = a
+#endif
         combineModuleLocations _ b = b
 
         concatFC :: FinderCacheState -> [FinderCache] -> IO FinderCache
@@ -1084,6 +1118,8 @@ getModSummaryFromImports env fp _modTime mContents = do
     -- The warns will hopefully be reported when we actually parse the module
     (_warns, L main_loc hsmod) <- parseHeader dflags fp contents
 
+    query <- liftIO $ hscUnitIndexQuery env
+
     -- Copied from `HeaderInfo.getImports`, but we also need to keep the parsed imports
     let mb_mod = hsmodName hsmod
         imps = hsmodImports hsmod
@@ -1110,7 +1146,7 @@ getModSummaryFromImports env fp _modTime mContents = do
 
         msrImports = implicit_imports ++ imps
 
-        rn_pkg_qual = renameRawPkgQual (hsc_unit_env ppEnv)
+        rn_pkg_qual = renameRawPkgQual (hsc_unit_env ppEnv) query
         rn_imps = fmap (\(pk, lmn@(L _ mn)) -> (rn_pkg_qual mn pk, lmn))
         srcImports = rn_imps $ map convImport src_idecls
         textualImports = rn_imps $ map convImport (implicit_imports ++ ordinary_imps)
@@ -1149,6 +1185,7 @@ getModSummaryFromImports env fp _modTime mContents = do
                 , ms_parsed_mod   = Nothing
                 , ms_srcimps      = srcImports
                 , ms_textual_imps = textualImports
+                , ms_opts = []
                 }
 
     msrFingerprint <- liftIO $ computeFingerprint opts msrModSummary
@@ -1180,6 +1217,9 @@ getModSummaryFromImports env fp _modTime mContents = do
                                          , ml_obj_file
                                          , ml_dyn_obj_file
                                          , ml_hie_file]
+#if defined(MWB)
+        modLocationFingerprint _ = error "bug"
+#endif
 
 -- | Parse only the module header
 parseHeader
@@ -1517,16 +1557,14 @@ showReason (NeedsRecompile s)           = printWithoutUniques s
 mkDetailsFromIface :: HscEnv -> ModIface -> IO ModDetails
 mkDetailsFromIface session iface = do
   fixIO $ \details -> do
-    let !hsc' = hscUpdateHPT (\hpt -> addToHpt hpt (moduleName $ mi_module iface) (HomeModInfo iface details emptyHomeModInfoLinkable)) session
+    !hsc' <- addHmiToHpt (HomeModInfo iface details emptyHomeModInfoLinkable) session
     initIfaceLoad hsc' (typecheckIface iface)
 
 coreFileToCgGuts :: HscEnv -> ModIface -> ModDetails -> CoreFile -> IO CgGuts
 coreFileToCgGuts session iface details core_file = do
-  let act hpt = addToHpt hpt (moduleName this_mod)
-                             (HomeModInfo iface details emptyHomeModInfoLinkable)
-      this_mod = mi_module iface
+  let this_mod = mi_module iface
   types_var <- newIORef (md_types details)
-  let hsc_env' = hscUpdateHPT act (session {
+  hsc_env' <- addHmiToHpt (HomeModInfo iface details emptyHomeModInfoLinkable) (session {
         hsc_type_env_vars = knotVarsFromModuleEnv (mkModuleEnv [(this_mod, types_var)])
         })
   core_binds <- initIfaceCheck (text "l") hsc_env' $ typecheckCoreFile this_mod types_var core_file
@@ -1535,7 +1573,7 @@ coreFileToCgGuts session iface details core_file = do
       tyCons = typeEnvTyCons (md_types details)
   -- In GHC 9.6, the implicit binds are tidied and part of core_binds
   pure $ CgGuts this_mod tyCons core_binds [] NoStubs [] mempty
-#if !MIN_VERSION_ghc(9,11,0)
+#if !(MIN_VERSION_ghc(9,11,0) || defined(MWB))
                 (emptyHpcInfo False)
 #endif
                 Nothing []

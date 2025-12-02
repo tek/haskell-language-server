@@ -176,6 +176,12 @@ import           System.Info.Extra                            (isWindows)
 import qualified Data.IntMap                                  as IM
 import           GHC.Fingerprint
 
+#if defined(MWB)
+
+import GHC.Unit.Home.Graph
+
+#endif
+
 data Log
   = LogShake Shake.Log
   | LogReindexingHieFile !NormalizedFilePath
@@ -324,7 +330,12 @@ getLocatedImportsRule recorder =
         let imports = [(False, imp) | imp <- ms_textual_imps ms] ++ [(True, imp) | imp <- ms_srcimps ms]
         env_eq <- use_ GhcSession file
         let env = hscEnv env_eq
-        let import_dirs = map (second homeUnitEnv_dflags) $ hugElts $ hsc_HUG env
+        let import_dirs = map (second homeUnitEnv_dflags) $
+#if defined(MWB)
+              M.toList (unitEnv_graph $ hsc_HUG env)
+#else
+              hugElts $ hsc_HUG env
+#endif
         let dflags = hsc_dflags env
         opt <- getIdeOptions
         let getTargetFor modName nfp
@@ -1075,7 +1086,7 @@ getLinkableRule recorder =
     HiFileResult{hirModSummary, hirModIface, hirModDetails, hirCoreFp} <- use_ GetModIface f
     let obj_file  = ml_obj_file (ms_location hirModSummary)
         core_file = ml_core_file (ms_location hirModSummary)
-#if MIN_VERSION_ghc(9,11,0)
+#if MIN_VERSION_ghc(9,11,0) || defined(MWB)
         mkLinkable t mod l = Linkable t mod (pure l)
         dotO o = DotO o ModuleObject
 #else
@@ -1111,7 +1122,7 @@ getLinkableRule recorder =
               _ -> liftIO $ coreFileToLinkable linkableType (hscEnv session) hirModSummary hirModIface hirModDetails bin_core (error "object doesn't have time")
         -- Record the linkable so we know not to unload it, and unload old versions
         whenJust ((homeModInfoByteCode =<< hmi) <|> (homeModInfoObject =<< hmi))
-#if MIN_VERSION_ghc(9,11,0)
+#if MIN_VERSION_ghc(9,11,0) || defined(MWB)
           $ \(Linkable time mod _) -> do
 #else
           $ \(LM time mod _) -> do

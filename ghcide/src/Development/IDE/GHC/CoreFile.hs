@@ -21,7 +21,7 @@ import           GHC.Core
 import           GHC.CoreToIface
 import           GHC.Fingerprint
 import           GHC.Iface.Binary
-#if MIN_VERSION_ghc(9,11,0)
+#if MIN_VERSION_ghc(9,11,0) || defined(MWB)
 import qualified GHC.Iface.Load                  as Iface
 #endif
 import           GHC.Iface.Recomp.Binary         (fingerprintBinMem)
@@ -67,7 +67,7 @@ writeBinCoreFile _dflags core_path fat_iface = do
 
     putWithUserData
       quietTrace
-#if MIN_VERSION_ghc(9,11,0)
+#if MIN_VERSION_ghc(9,11,0) || defined(MWB)
       (Iface.flagsToIfCompression _dflags)
 #endif
       bh

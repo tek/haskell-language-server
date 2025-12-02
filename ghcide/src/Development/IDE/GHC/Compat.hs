@@ -71,7 +71,6 @@ module Development.IDE.GHC.Compat(
     lintInteractiveExpr,
     icInteractiveModule,
     HomePackageTable,
-    lookupHpt,
     loadModulesHome,
     bcoFreeNames,
     ModIfaceAnnotation,
@@ -181,8 +180,6 @@ import           GHC.StgToByteCode
 import           GHC.Types.CostCentre
 import           GHC.Types.IPE
 import           GHC.Types.SrcLoc                        (combineRealSrcSpans)
-import           GHC.Unit.Home.ModInfo                   (HomePackageTable,
-                                                          lookupHpt)
 import           GHC.Unit.Module.Deps                    (Dependencies (dep_direct_mods),
                                                           Usage (..))
 import           GHC.Unit.Module.ModIface
@@ -191,6 +188,17 @@ import           GHC.Unit.Module.ModIface
 
 #if MIN_VERSION_ghc(9,7,0)
 import           GHC.Tc.Zonk.TcType                      (tcInitTidyEnv)
+#endif
+
+#if defined(MWB)
+
+import Data.Foldable (for_)
+import GHC.Unit.Home.PackageTable (HomePackageTable)
+
+#else
+
+import           GHC.Unit.Home.ModInfo                   (HomePackageTable)
+
 #endif
 
 #if !MIN_VERSION_ghc(9,7,0)
@@ -452,12 +460,26 @@ mkAstNode n = Node (SourcedNodeInfo $ Map.singleton GeneratedInfo n)
 -- The order modules are loaded is important when there are hs-boot files.
 -- In particular you should make sure to load the .hs version of a file after the
 -- .hs-boot version.
+#if defined(MWB)
+
 loadModulesHome
     :: [HomeModInfo]
     -> HscEnv
+    -> IO HscEnv
+loadModulesHome mod_infos e = do
+  for_ mod_infos $ \ mi -> hscInsertHPT mi (e { hsc_type_env_vars = emptyKnotVars })
+  pure e
+
+#else
+
+loadModulesHome
+    :: [HomeModInfo]
     -> HscEnv
+    -> IO HscEnv
 loadModulesHome mod_infos e =
-  hscUpdateHUG (\hug -> foldl' (flip addHomeModInfoToHug) hug mod_infos) (e { hsc_type_env_vars = emptyKnotVars })
+  pure $ hscUpdateHUG (\hug -> foldl' (flip addHomeModInfoToHug) hug mod_infos) (e { hsc_type_env_vars = emptyKnotVars })
+
+#endif
 
 recDotDot :: HsRecFields (GhcPass p) arg -> Maybe Int
 recDotDot x =

@@ -122,9 +122,9 @@ pprNoLocMsgEnvelope (MsgEnvelope { errMsgDiagnostic = e
 type ErrMsg  = MsgEnvelope GhcMessage
 type WarnMsg  = MsgEnvelope GhcMessage
 
-mkPrintUnqualifiedDefault :: HscEnv -> GlobalRdrEnv -> PrintUnqualified
-mkPrintUnqualifiedDefault env =
-  mkNamePprCtx ptc (hsc_unit_env env)
+mkPrintUnqualifiedDefault :: HscEnv -> UnitIndexQuery -> GlobalRdrEnv -> PrintUnqualified
+mkPrintUnqualifiedDefault env query =
+  mkNamePprCtx ptc (hsc_unit_env env) query
     where
       ptc = initPromotionTickContext (hsc_dflags env)
 

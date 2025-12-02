@@ -69,7 +69,7 @@ module Development.IDE.GHC.Compat.Core (
     IfaceTyCon(..),
     ModIface,
     ModIface_(..),
-#if MIN_VERSION_ghc(9,11,0)
+#if MIN_VERSION_ghc(9,11,0) || defined(MWB)
     pattern ModIface,
     set_mi_top_env,
     set_mi_usages,
@@ -236,7 +236,7 @@ module Development.IDE.GHC.Compat.Core (
     ModuleOrigin(..),
     PackageName(..),
     -- * Linker
-#if MIN_VERSION_ghc(9,11,0)
+#if MIN_VERSION_ghc(9,11,0) || defined(MWB)
     LinkablePart(..),
 #else
     Unlinked(..),
@@ -254,8 +254,7 @@ module Development.IDE.GHC.Compat.Core (
     metaRequestD,
     metaRequestAW,
     -- * HPT
-    addToHpt,
-    addListToHpt,
+    addHmiToHpt,
     -- * Driver-Make
     Target(..),
     TargetId(..),
@@ -531,7 +530,7 @@ import           GHC.Hs                      (SrcSpanAnn')
 #endif
 import           GHC.Unit.Module.ModIface    (IfaceExport, ModIface,
                                               ModIface_ (..), mi_fix
-#if MIN_VERSION_ghc(9,11,0)
+#if MIN_VERSION_ghc(9,11,0) || defined(MWB)
                                              , pattern ModIface
                                              , set_mi_top_env
                                              , set_mi_usages
@@ -546,7 +545,7 @@ import           Language.Haskell.Syntax     hiding (FunDep)
 
 -- See Note [Guidelines For Using CPP In GHCIDE Import Statements]
 
-#if MIN_VERSION_ghc(9,11,0)
+#if MIN_VERSION_ghc(9,11,0) || defined(MWB)
 import System.OsPath
 #endif
 
@@ -563,6 +562,11 @@ mkHomeModLocation :: DynFlags -> ModuleName -> FilePath -> IO Module.ModLocation
 mkHomeModLocation df mn f =
   let osf = unsafeEncodeUtf f
   in pure $ GHC.mkHomeModLocation (GHC.initFinderOpts df) mn osf
+#elif defined(MWB)
+mkHomeModLocation df mn f =
+  let osf = unsafeEncodeUtf f
+      (basename, extension) = splitExtension osf
+  in pure $ GHC.mkHomeModLocation (GHC.initFinderOpts df) mn basename extension HsSrcFile
 #else
 mkHomeModLocation df mn f = pure $ GHC.mkHomeModLocation (GHC.initFinderOpts df) mn f
 #endif
@@ -679,7 +683,7 @@ initObjLinker env =
 loadDLL :: HscEnv -> String -> IO (Maybe String)
 loadDLL env str = do
     res <- GHCi.loadDLL (GHCi.hscInterp env) str
-#if MIN_VERSION_ghc(9,11,0) || (MIN_VERSION_ghc(9, 8, 3) && !MIN_VERSION_ghc(9, 9, 0)) || (MIN_VERSION_ghc(9, 10, 2) && !MIN_VERSION_ghc(9, 11, 0))
+#if MIN_VERSION_ghc(9,11,0) || (MIN_VERSION_ghc(9, 8, 3) && !MIN_VERSION_ghc(9, 9, 0)) || (MIN_VERSION_ghc(9, 10, 2) && !MIN_VERSION_ghc(9, 11, 0)) || defined(MWB)
     pure $
       case res of
         Left err_msg -> Just err_msg
@@ -750,4 +754,19 @@ mkSimpleTarget df fp = Target (TargetFile fp Nothing) True (homeUnitId_ df) Noth
 
 #if MIN_VERSION_ghc(9,7,0)
 lookupGlobalRdrEnv gre_env occ = lookupGRE gre_env (LookupOccName occ AllRelevantGREs)
+#endif
+
+#if defined(MWB)
+
+addHmiToHpt :: HomeModInfo -> HscEnv -> IO HscEnv
+addHmiToHpt hmi hsc_env = do
+  hscInsertHPT hmi hsc_env
+  pure hsc_env
+
+#else
+
+addHmiToHpt :: HomeModInfo -> HscEnv -> IO HscEnv
+addHmiToHpt hmi =
+  pure . hscUpdateHPT (\ hpt -> addToHpt hpt (moduleName (mi_module (hm_iface hmi))) hmi)
+
 #endif

@@ -120,7 +120,7 @@ import qualified Language.LSP.Protocol.Lens                   as L
 import           Language.LSP.Protocol.Message
 import           Language.LSP.Protocol.Types
 import           Language.LSP.Server
-#if MIN_VERSION_ghc(9,11,0)
+#if MIN_VERSION_ghc(9,11,0) || defined(MWB)
 import           GHC.Unit.Module.ModIface                     (IfaceTopEnv (..))
 #endif
 
@@ -262,12 +262,13 @@ initialiseSessionForEval needs_quickcheck st nfp = do
     -- it back to the iface for the current module.
     tm <- tmrTypechecked <$> use_ TypeCheck nfp
     let rdr_env = tcg_rdr_env tm
-    let linkable_hsc = loadModulesHome (map (addRdrEnv . linkableHomeMod) linkables) deps_hsc
-        addRdrEnv hmi
+    let addRdrEnv hmi
           | iface <- hm_iface hmi
           , ms_mod ms == mi_module iface
-#if MIN_VERSION_ghc(9,11,0)
+#if MIN_VERSION_ghc(9,11,0) || defined(MWB)
           = hmi { hm_iface = set_mi_top_env (Just $ IfaceTopEnv (forceGlobalRdrEnv (globalRdrEnvLocal rdr_env)) (mkIfaceImports $ tcg_import_decls tm)) iface}
+#elif MIN_VERSION_ghc(9,10,0)
+          = hmi { hm_iface = iface { mi_top_env = (Just $ IfaceTopEnv (forceGlobalRdrEnv (globalRdrEnvLocal rdr_env)) (mkIfaceImports $ tcg_import_decls tm)) }}
 #else
           = hmi { hm_iface = iface { mi_globals = Just $!
 #if MIN_VERSION_ghc(9,8,0)
@@ -278,6 +279,7 @@ initialiseSessionForEval needs_quickcheck st nfp = do
 #endif
           | otherwise = hmi
 
+    linkable_hsc <- liftIO $ loadModulesHome (map (addRdrEnv . linkableHomeMod) linkables) deps_hsc
     return (ms, linkable_hsc)
   -- Bit awkward we need to use evalGhcEnv here but setContext requires to run
   -- in the Ghc monad
@@ -296,7 +298,7 @@ initialiseSessionForEval needs_quickcheck st nfp = do
             getSession
   return env2
 
-#if MIN_VERSION_ghc(9,11,0)
+#if MIN_VERSION_ghc(9,11,0) || defined(MWB)
 mkIfaceImports :: [ImportUserSpec] -> [IfaceImport]
 mkIfaceImports = map go
   where

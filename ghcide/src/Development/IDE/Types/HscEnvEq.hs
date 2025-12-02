@@ -29,6 +29,7 @@ import           Ide.PluginUtils                 (toAbsolute)
 import           OpenTelemetry.Eventlog          (withSpan)
 import           System.Directory                (makeAbsolute)
 
+import GHC.Driver.Env (hscUnitIndexQuery)
 
 -- | An 'HscEnv' with equality. Two values are considered equal
 --   if they are created with the same call to 'newHscEnvEq' or
@@ -108,12 +109,13 @@ newHscEnvEq hscEnv' = do
         return $ createExportsMap modIfaces
 
     -- similar to envPackageExports, evaluated lazily
+    query <- hscUnitIndexQuery hscEnv
     envVisibleModuleNames <- onceAsync $
       fromRight Nothing
         <$> catchSrcErrors
           dflags
           "listVisibleModuleNames"
-          (evaluate . force . Just $ listVisibleModuleNames hscEnv)
+          (evaluate . force . Just $ listVisibleModuleNames hscEnv query)
 
     return HscEnvEq{..}
 

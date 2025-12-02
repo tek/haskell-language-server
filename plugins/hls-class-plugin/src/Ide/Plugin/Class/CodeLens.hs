@@ -3,6 +3,8 @@
 {-# LANGUAGE ViewPatterns    #-}
 module Ide.Plugin.Class.CodeLens where
 
+import GHC.Driver.Env (hscUnitIndexQuery)
+import Control.Monad.IO.Class (liftIO)
 import           Control.Lens                         ((&), (?~), (^.))
 import           Control.Monad.Trans.Class            (MonadTrans (lift))
 import           Data.Aeson                           hiding (Null)
@@ -48,9 +50,10 @@ codeLensResolve state plId cl uri uniqueID = do
             $ useWithStaleE GetInstanceBindLens nfp
     (tmrTypechecked -> gblEnv, _) <- runActionE "classplugin.codeAction.TypeCheck" state $ useWithStaleE TypeCheck nfp
     (hscEnv -> hsc, _) <- runActionE "classplugin.codeAction.GhcSession" state $ useWithStaleE GhcSession nfp
+    query <- liftIO $ hscUnitIndexQuery hsc
     (range, name, typ) <- handleMaybe PluginStaleResolve
                     $ IntMap.lookup uniqueID lensDetails
-    let title = prettyBindingNameString (printOutputable name) <> " :: " <> T.pack (showDoc hsc gblEnv typ)
+    let title = prettyBindingNameString (printOutputable name) <> " :: " <> T.pack (showDoc hsc query gblEnv typ)
     edit <- handleMaybe (PluginInvalidUserState "toCurrentRange") $ makeEdit range title pm
     let command = mkLspCommand plId typeLensCommandId title (Just [toJSON $ InstanceBindLensCommand uri edit])
     pure $ cl & L.command ?~ command

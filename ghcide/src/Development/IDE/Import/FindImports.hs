@@ -13,6 +13,7 @@ module Development.IDE.Import.FindImports
   , mkImportDirs
   ) where
 
+import GHC.Driver.Env (hscUnitIndexQuery)
 import           Control.DeepSeq
 import           Control.Monad.Extra
 import           Control.Monad.IO.Class
@@ -129,15 +130,18 @@ locateModule env comp_info exts targetFor modName mbPkgName isSource = do
     OtherPkg uid
       | Just (dirs, reexports) <- lookup uid import_paths
           -> lookupLocal uid dirs reexports
-      | otherwise -> lookupInPackageDB
+      | otherwise -> do
+        query <- liftIO $ hscUnitIndexQuery env
+        lookupInPackageDB query
     NoPkgQual -> do
 
+      query <- liftIO $ hscUnitIndexQuery env
       -- Reexports for current unit have to be empty because they only apply to other units depending on the
       -- current unit. If we set the reexports to be the actual reexports then we risk looping forever trying
       -- to find the module from the perspective of the current unit.
       mbFile <- locateModuleFile ((homeUnitId_ dflags, importPaths dflags, S.empty) : other_imports) exts targetFor isSource $ unLoc modName
       case mbFile of
-        LocateNotFound -> lookupInPackageDB
+        LocateNotFound -> lookupInPackageDB query
         -- Lookup again with the perspective of the unit reexporting the file
         LocateFoundReexport uid -> locateModule (hscSetActiveUnitId uid env) comp_info exts targetFor modName noPkgQual isSource
         LocateFoundFile uid file -> toModLocation uid file
@@ -161,7 +165,7 @@ locateModule env comp_info exts targetFor modName mbPkgName isSource = do
     ue = hsc_unit_env env
     units = homeUnitEnv_units $ ue_findHomeUnitEnv (homeUnitId_ dflags) ue
     hpt_deps :: [UnitId]
-    hpt_deps = homeUnitDepends units
+    hpt_deps = S.toList (homeUnitDepends units)
 
     toModLocation uid file = liftIO $ do
         loc <- mkHomeModLocation dflags (unLoc modName) (fromNormalizedFilePath file)
@@ -176,8 +180,8 @@ locateModule env comp_info exts targetFor modName mbPkgName isSource = do
         LocateFoundReexport uid' -> locateModule (hscSetActiveUnitId uid' env) comp_info exts targetFor modName noPkgQual isSource
         LocateFoundFile uid' file -> toModLocation uid' file
 
-    lookupInPackageDB = do
-      case Compat.lookupModuleWithSuggestions env (unLoc modName) mbPkgName of
+    lookupInPackageDB query = do
+      case Compat.lookupModuleWithSuggestions env query (unLoc modName) mbPkgName of
         LookupFound _m _pkgConfig -> return $ Right PackageImport
         reason -> return $ Left $ notFoundErr env modName reason
 
