@@ -1075,7 +1075,7 @@ getLinkableRule recorder =
     HiFileResult{hirModSummary, hirModIface, hirModDetails, hirCoreFp} <- use_ GetModIface f
     let obj_file  = ml_obj_file (ms_location hirModSummary)
         core_file = ml_core_file (ms_location hirModSummary)
-#if MIN_VERSION_ghc(9,11,0)
+#if MIN_VERSION_ghc(9,10,0)
         mkLinkable t mod l = Linkable t mod (pure l)
         dotO o = DotO o ModuleObject
 #else
@@ -1111,7 +1111,7 @@ getLinkableRule recorder =
               _ -> liftIO $ coreFileToLinkable linkableType (hscEnv session) hirModSummary hirModIface hirModDetails bin_core (error "object doesn't have time")
         -- Record the linkable so we know not to unload it, and unload old versions
         whenJust ((homeModInfoByteCode =<< hmi) <|> (homeModInfoObject =<< hmi))
-#if MIN_VERSION_ghc(9,11,0)
+#if MIN_VERSION_ghc(9,10,0)
           $ \(Linkable time mod _) -> do
 #else
           $ \(LM time mod _) -> do

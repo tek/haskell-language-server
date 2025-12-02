@@ -120,7 +120,7 @@ import qualified Language.LSP.Protocol.Lens                   as L
 import           Language.LSP.Protocol.Message
 import           Language.LSP.Protocol.Types
 import           Language.LSP.Server
-#if MIN_VERSION_ghc(9,11,0)
+#if MIN_VERSION_ghc(9,10,0)
 import           GHC.Unit.Module.ModIface                     (IfaceTopEnv (..))
 #endif
 
@@ -268,6 +268,8 @@ initialiseSessionForEval needs_quickcheck st nfp = do
           , ms_mod ms == mi_module iface
 #if MIN_VERSION_ghc(9,11,0)
           = hmi { hm_iface = set_mi_top_env (Just $ IfaceTopEnv (forceGlobalRdrEnv (globalRdrEnvLocal rdr_env)) (mkIfaceImports $ tcg_import_decls tm)) iface}
+#elif MIN_VERSION_ghc(9,10,0)
+          = hmi { hm_iface = iface { mi_top_env = (Just $ IfaceTopEnv (forceGlobalRdrEnv (globalRdrEnvLocal rdr_env)) (mkIfaceImports $ tcg_import_decls tm)) }}
 #else
           = hmi { hm_iface = iface { mi_globals = Just $!
 #if MIN_VERSION_ghc(9,8,0)
@@ -296,7 +298,7 @@ initialiseSessionForEval needs_quickcheck st nfp = do
             getSession
   return env2
 
-#if MIN_VERSION_ghc(9,11,0)
+#if MIN_VERSION_ghc(9,10,0)
 mkIfaceImports :: [ImportUserSpec] -> [IfaceImport]
 mkIfaceImports = map go
   where

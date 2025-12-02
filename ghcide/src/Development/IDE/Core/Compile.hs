@@ -116,6 +116,7 @@ import           GHC.Types.Error
 import           GHC.Types.ForeignStubs
 import           GHC.Types.HpcInfo
 import           GHC.Types.TypeEnv
+import           GHC.Linker.Types (LinkableObjectSort (..))
 
 -- See Note [Guidelines For Using CPP In GHCIDE Import Statements]
 
@@ -142,9 +143,9 @@ import           Development.IDE.GHC.Compat                   hiding
                                                                writeHieFile)
 #endif
 
-#if MIN_VERSION_ghc(9,11,0)
 import qualified Data.List.NonEmpty                           as NE
 import           Data.Time                                    (getCurrentTime)
+#if MIN_VERSION_ghc(9,11,0)
 import           GHC.Driver.Env                               (hsc_all_home_unit_ids)
 import           GHC.Iface.Ext.Types                          (NameEntityInfo)
 #endif
@@ -152,6 +153,7 @@ import           GHC.Iface.Ext.Types                          (NameEntityInfo)
 #if MIN_VERSION_ghc(9,12,0)
 import           Development.IDE.Import.FindImports
 #endif
+import           GHC.Unit.Module.ModIface                     (IfaceTopEnv (..))
 
 --Simple constants to make sure the source is consistently named
 sourceTypecheck :: T.Text
@@ -292,7 +294,7 @@ captureSplicesAndDeps TypecheckHelpers{..} env k = do
                        (icInteractiveModule ictxt)
                        stg_expr
                        [] Nothing
-#if MIN_VERSION_ghc(9,11,0)
+#if MIN_VERSION_ghc(9,10,0)
                        [] -- spt_entries
 #endif
 
@@ -326,7 +328,7 @@ captureSplicesAndDeps TypecheckHelpers{..} env k = do
            ; let hsc_env' = loadModulesHome (map linkableHomeMod lbs) hsc_env
 
              {- load it -}
-#if MIN_VERSION_ghc(9,11,0)
+#if MIN_VERSION_ghc(9,10,0)
            ; bco_time <- getCurrentTime
            ; (fv_hvs, lbss, pkgs) <- loadDecls (hscInterp hsc_env') hsc_env' srcspan $
                 Linkable bco_time (icInteractiveModule ictxt) $ NE.singleton $ BCOs bcos
@@ -351,8 +353,8 @@ captureSplicesAndDeps TypecheckHelpers{..} env k = do
 
     -- Compute the transitive set of linkables required
     getTransitiveMods hsc_env needed_mods
-      = Set.unions (Set.fromList (map moduleToNodeKey mods) : [ dep | m <- mods
-                                                              , Just dep <- [Map.lookup (moduleToNodeKey m) (mgTransDeps (hsc_mod_graph hsc_env))]
+      = Set.unions (Set.fromList (map moduleToNodeKey mods) : [ Set.fromList (mkNodeKey <$> dep) | m <- mods
+                                                              , Just dep <- [mgReachable (hsc_mod_graph hsc_env) (moduleToNodeKey m)]
                                                               ])
       where mods = nonDetEltsUniqSet needed_mods -- OK because we put them into a set immediately after
 
@@ -462,7 +464,7 @@ mkHiFileResultNoCompile session tcm = do
                 & set_mi_top_env Nothing
                 & set_mi_usages (filterUsages (mi_usages iface'))
 #else
-                { mi_globals = Nothing, mi_usages = filterUsages (mi_usages iface') }
+                { mi_top_env = Nothing, mi_usages = filterUsages (mi_usages iface') }
 #endif
   pure $! mkHiFileResult ms iface details (tmrRuntimeModules tcm) Nothing
 
@@ -487,14 +489,14 @@ mkHiFileResultCompile se session' tcm simplified_guts = catchErrs $ do
                                               (cg_binds guts)
                                               details
                                               ms
-#if MIN_VERSION_ghc(9,11,0)
+#if MIN_VERSION_ghc(9,10,0)
                                               (tcg_import_decls (tmrTypechecked tcm))
 #endif
                                               simplified_guts
 
   final_iface' <- mkFullIface session partial_iface Nothing
                     Nothing
-#if MIN_VERSION_ghc(9,11,0)
+#if MIN_VERSION_ghc(9,10,0)
                     NoStubs []
 #endif
   -- See Note [Clearing mi_globals after generating an iface]
@@ -503,7 +505,7 @@ mkHiFileResultCompile se session' tcm simplified_guts = catchErrs $ do
                       & set_mi_top_env Nothing
                       & set_mi_usages (filterUsages (mi_usages final_iface'))
 #else
-                      {mi_globals = Nothing, mi_usages = filterUsages (mi_usages final_iface')}
+                      {mi_top_env = Nothing, mi_usages = filterUsages (mi_usages final_iface')}
 #endif
 
   -- Write the core file now
@@ -658,7 +660,7 @@ generateObjectCode session summary guts = do
                         Just x -> pure x
               -- Need time to be the modification time for recompilation checking
               t <- liftIO $ getModificationTime dot_o_fp
-#if MIN_VERSION_ghc(9,11,0)
+#if MIN_VERSION_ghc(9,10,0)
               let linkable = Linkable t mod (pure $ DotO dot_o_fp ModuleObject)
 #else
               let linkable = LM t mod [DotO dot_o_fp]
@@ -672,7 +674,7 @@ generateByteCode (CoreFileTime time) hscEnv summary guts = do
     fmap (either (, Nothing) (second Just)) $
           catchSrcErrors (hsc_dflags hscEnv) "bytecode" $ do
 
-#if MIN_VERSION_ghc(9,11,0)
+#if MIN_VERSION_ghc(9,10,0)
               (warnings, (_, bytecode)) <-
                 withWarnings "bytecode" $ \_tweak -> do
                       let session = _tweak (hscSetFlags (ms_hspp_opts summary) hscEnv)
@@ -690,7 +692,7 @@ generateByteCode (CoreFileTime time) hscEnv summary guts = do
                                 (ms_location summary')
 #endif
 
-#if MIN_VERSION_ghc(9,11,0)
+#if MIN_VERSION_ghc(9,10,0)
               let linkable = Linkable time (ms_mod summary) (pure $ BCOs bytecode)
 #else
               let linkable = LM time (ms_mod summary) [BCOs bytecode sptEntries]
@@ -1149,6 +1151,7 @@ getModSummaryFromImports env fp _modTime mContents = do
                 , ms_parsed_mod   = Nothing
                 , ms_srcimps      = srcImports
                 , ms_textual_imps = textualImports
+                , ms_opts = []
                 }
 
     msrFingerprint <- liftIO $ computeFingerprint opts msrModSummary
@@ -1535,7 +1538,7 @@ coreFileToCgGuts session iface details core_file = do
       tyCons = typeEnvTyCons (md_types details)
   -- In GHC 9.6, the implicit binds are tidied and part of core_binds
   pure $ CgGuts this_mod tyCons core_binds [] NoStubs [] mempty
-#if !MIN_VERSION_ghc(9,11,0)
+#if !MIN_VERSION_ghc(9,10,0)
                 (emptyHpcInfo False)
 #endif
                 Nothing []

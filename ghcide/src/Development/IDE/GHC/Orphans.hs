@@ -46,7 +46,7 @@ instance Show ModDetails where show = const "<moddetails>"
 instance NFData ModDetails where rnf = rwhnf
 instance NFData SafeHaskellMode where rnf = rwhnf
 instance Show Linkable where show = unpack . printOutputable
-#if MIN_VERSION_ghc(9,11,0)
+#if MIN_VERSION_ghc(9,10,0)
 instance NFData Linkable where rnf (Linkable a b c) = rnf a `seq` rnf b `seq` rnf c
 instance NFData LinkableObjectSort where rnf = rwhnf
 instance NFData LinkablePart where
@@ -71,7 +71,7 @@ instance NFData WholeCoreBindings where
 #if MIN_VERSION_ghc(9,11,0)
   rnf (WholeCoreBindings bs m ml f) = rnf bs `seq` rnf m `seq` rnf ml `seq` rnf f
 #else
-  rnf (WholeCoreBindings bs m ml) = rnf bs `seq` rnf m `seq` rnf ml
+  rnf (WholeCoreBindings bs m ml _) = rnf bs `seq` rnf m `seq` rnf ml
 #endif
 
 instance NFData ModLocation where

@@ -122,10 +122,12 @@ import           Text.ParserCombinators.ReadP        (readP_to_S)
 import           GHC.Driver.Env                      (hsc_all_home_unit_ids)
 import           GHC.Driver.Errors.Types
 import           GHC.Types.Error                     (errMsgDiagnostic,
-                                                      singleMessage)
+                                                      singleMessage, getMessages)
 import           GHC.Unit.State
 
-#if MIN_VERSION_ghc(9,13,0)
+import Development.IDE.GHC.Compat.Util (bagToList)
+
+#if MIN_VERSION_ghc(9,10,0)
 import           GHC.Driver.Make                     (checkHomeUnitsClosed)
 #endif
 
@@ -796,10 +798,14 @@ toFlagsMap TargetDetails{..} =
 setNameCache :: NameCache -> HscEnv -> HscEnv
 setNameCache nc hsc = hsc { hsc_NC = nc }
 
-#if MIN_VERSION_ghc(9,13,0)
+#if MIN_VERSION_ghc(9,10,0)
 -- Moved back to implementation in GHC.
-checkHomeUnitsClosed' ::  UnitEnv -> OS.Set UnitId -> [DriverMessages]
-checkHomeUnitsClosed' ue _ = checkHomeUnitsClosed ue
+checkHomeUnitsClosed' ::  UnitEnv -> OS.Set UnitId -> Maybe (Compat.MsgEnvelope DriverMessage)
+checkHomeUnitsClosed' ue _ = case checkHomeUnitsClosed ue of
+  msgs : _ -> case bagToList (getMessages msgs) of
+    [msg] -> Just msg
+    _ -> Nothing
+  _ -> Nothing
 #else
 -- This function checks the important property that if both p and q are home units
 -- then any dependency of p, which transitively depends on q is also a home unit.

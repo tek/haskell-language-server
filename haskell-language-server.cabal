@@ -1909,8 +1909,6 @@ library
                   , importLens
                   , rename
                   , retrie
-                  , hlint
-                  , stan
                   , signatureHelp
                   , moduleName
                   , pragmas
@@ -1922,9 +1920,6 @@ library
                   , explicitFixity
                   , explicitFields
                   , floskell
-                  , fourmolu
-                  , ormolu
-                  , stylishHaskell
                   , refactor
                   , overloadedRecordDot
                   , semanticTokens
