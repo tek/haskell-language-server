@@ -179,6 +179,15 @@ import           GHC.Fingerprint
 #if defined(MWB)
 
 import GHC.Unit.Home.Graph
+import GHC.Unit.Module.Graph (ModuleNodeInfo (..))
+
+moduleNodeInfo :: ModSummary -> ModuleNodeInfo
+moduleNodeInfo = ModuleNodeCompile
+
+#else
+
+moduleNodeInfo :: ModSummary -> ModSummary
+moduleNodeInfo = id
 
 #endif
 
@@ -649,9 +658,10 @@ dependencyInfoForFiles fs = do
   let (all_fs, _all_ids) = unzip $ HM.toList $ pathToIdMap $ rawPathIdMap rawDepInfo
   msrs <- uses GetModSummaryWithoutTimestamps all_fs
   let mss = map (fmap msrModSummary) msrs
+      mni = map (fmap moduleNodeInfo) mss
   let deps = map (\i -> IM.lookup (getFilePathId i) (rawImports rawDepInfo)) _all_ids
       nodeKeys = IM.fromList $ catMaybes $ zipWith (\fi mms -> (getFilePathId fi,) . NodeKey_Module . msKey <$> mms) _all_ids mss
-      mns = catMaybes $ zipWith go mss deps
+      mns = catMaybes $ zipWith go mni deps
       go (Just ms) (Just (Right (ModuleImports xs))) = Just $ ModuleNode this_dep_keys ms
         where this_dep_ids = mapMaybe snd xs
               this_dep_keys = mapMaybe (\fi -> IM.lookup (getFilePathId fi) nodeKeys) this_dep_ids
@@ -789,7 +799,7 @@ ghcSessionDepsDefinition fullModSummary GhcSessionDepsConfig{..} env file = do
                   dep_mss <- map msrModSummary <$> uses_ GetModSummaryWithoutTimestamps deps
                   return $!! map (NodeKey_Module . msKey) dep_mss
                 let module_graph_nodes =
-                      nubOrdOn mkNodeKey (ModuleNode final_deps ms : concatMap mgModSummaries' mgs)
+                      nubOrdOn mkNodeKey (ModuleNode final_deps (moduleNodeInfo ms) : concatMap mgModSummaries' mgs)
                 liftIO $ evaluate $ liftRnf rwhnf module_graph_nodes
                 return $ mkModuleGraph module_graph_nodes
             session' <- liftIO $ mergeEnvs hsc mg de ms inLoadOrder depSessions
